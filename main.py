@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 import urllib.parse as urlparse
 from bs4 import BeautifulSoup
+import re
 
 
 def construct_geojson_url(d):
@@ -16,19 +17,40 @@ def construct_geojson_url(d):
                                                                                                episodeid[0])
 
 
-# create requests session
-session = requests.Session()
+def get_extra_info(table):
+    tds = [row.findAll('td') for row in table.findAll('tr')]
+    return {re.sub(r'\W+', '', td[0].string).lower(): td[1].text for td in tds}
 
-# use the requests session to get the json packet
-disaster_data_string = session.get('http://www.gdacs.org/xml/archive.geojson').text
 
-# use json.loads to create a json (or dictionary in Python speak) object from a string
-disaster_data = json.loads(disaster_data_string)
+def parse_extra_info(i, type):
+    if type == "Drought":
+        return {
+            'impact': i['impact']
+        }
+    elif type == "Earthquake":
+        return {
+            'depth': i['depth'],
+            'exposed_population': i['exposedpopulation']
+        }
+    elif type == "Tropical Cyclone":
+        return {'name': i['name'],
+                'max_wind_speed': i['maximumwindspeed'],
+                'max_storm_surge': i['maximumstormsurge'],
+                'exposed_population': i['exposedpopulation'],
+                'vulnerability': i['vulnerability']
+                }
+    elif type == "Flood":
+        return {
+            'death_toll': i['peoplekilled'],
+            'people_displaced': i['peopledisplaced']
+        }
+    elif type == "Volcano":
+        return {
+            'name': i['volcanoeruption'],
+            'exposed_population': i['exposedpopulation']
+        }
 
-# get all of the disaster data in the 'features' slot
-disasters = disaster_data['features']
 
-# disaster type key
 d_key = {
     'DR': 'Drought',
     'TC': 'Tropical Cyclone',
@@ -37,35 +59,13 @@ d_key = {
     'VO': 'Volcano'
 }
 
+session = requests.Session()
+disaster_data_string = session.get('http://www.gdacs.org/xml/archive.geojson').text
+disaster_data = json.loads(disaster_data_string)
+disasters = disaster_data['features']
+
 output = {}
 for disaster in disasters:
-
-    # event summary
-    summary = session.get(disaster['properties']['link']).text
-    soup = BeautifulSoup(summary, features='html.parser')
-    tab = soup.find("table", {"class": "summary"})
-    cells = tab.findAll("td")
-
-    switch = 0
-    outlist = []
-    for values in cells:
-        if switch == 0:
-            text = values.text
-            switch += 1
-        else:
-            text += "; " + values.text
-            switch = 0
-            outlist.append(text.lower())
-    print(outlist)
-
-    # further disaster specific data
-    geojson_url = construct_geojson_url(disaster)
-    try:
-        disaster_geo = json.loads(session.get(geojson_url).text)
-        alert_score = disaster_geo['features'][0]['properties']['alertscore']
-    except:
-        alert_score = 0
-
     # get disaster type
     type_id = disaster['id'][:2]
     d_type = d_key[type_id]
@@ -73,6 +73,23 @@ for disaster in disasters:
     # if key isn't already in the output variable then add it
     if d_type not in output:
         output[d_type] = []
+
+    # extra info
+    summary = session.get(disaster['properties']['link']).text
+    soup = BeautifulSoup(summary, features='html.parser')
+    tab = soup.find("table", {"class": "summary"})
+    extra_info = get_extra_info(tab)
+    parsed_extra_info = parse_extra_info(extra_info, d_type)
+
+    # further disaster specific data
+    geojson_url = construct_geojson_url(disaster)
+    try:
+        disaster_geo = json.loads(session.get(geojson_url).text)
+        alert_score = disaster_geo['features'][0]['properties']['alertscore']
+        print("yh", d_type, alert_score, sep=';')
+    except:
+        print("no", d_type, sep=';')
+        alert_score = 0
 
     # get start and end dates and calculate duration of disaster
     start_date_h = datetime.strptime(disaster['properties']['fromdate'], '%d/%b/%Y %H:%M:%S')
@@ -86,20 +103,14 @@ for disaster in disasters:
     if end_date.date() == datetime.today().date():
         ongoing = True
 
-    # get alert level
+    # get more params
     alert_level = disaster['properties']['alertlevel']
-
-    # severity index
     severity_index = disaster['properties']['severity']
-
-    # country list
     country_list = disaster['properties']['countrylist']
-
-    # coordinates
     coordinates = {'x': disaster['geometry']['coordinates'][1], 'y': disaster['geometry']['coordinates'][0]}
 
     # add data to output variable
-    output[d_type].append({
+    disaster_data = {
         'alert_level': alert_level,
         'alert_score': alert_score,
         'severity': severity_index,
@@ -108,19 +119,12 @@ for disaster in disasters:
         'end_date': end_date,
         'duration': duration,
         'ongoing': ongoing,
-        'coordinates': coordinates
-    })
+        'coordinates': coordinates,
+    }
+    disaster_data.update(parsed_extra_info)
+    output[d_type].append(disaster_data)
 
-    print('Disaster type:', d_type)
-    print('Severity Index:', severity_index)
-    print('Alert score:', alert_score)
-    print(disaster['properties']['link'])
-    print('#####################')
 
-json_output = json.dumps(output, default=str)
-f = open('output.txt', 'w')
-f.write(json_output)
-f.close()
 
 # debug point
 ender = True
