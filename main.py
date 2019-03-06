@@ -5,6 +5,7 @@ from datetime import datetime
 import urllib.parse as urlparse
 from bs4 import BeautifulSoup
 import re
+import csv
 
 
 def construct_geojson_url(d):
@@ -86,9 +87,7 @@ for disaster in disasters:
     try:
         disaster_geo = json.loads(session.get(geojson_url).text)
         alert_score = disaster_geo['features'][0]['properties']['alertscore']
-        print("yh", d_type, alert_score, sep=';')
     except:
-        print("no", d_type, sep=';')
         alert_score = 0
 
     # get start and end dates and calculate duration of disaster
@@ -111,6 +110,7 @@ for disaster in disasters:
 
     # add data to output variable
     disaster_data = {
+        'further_info': disaster['properties']['link'],
         'alert_level': alert_level,
         'alert_score': alert_score,
         'severity': severity_index,
@@ -124,7 +124,22 @@ for disaster in disasters:
     disaster_data.update(parsed_extra_info)
     output[d_type].append(disaster_data)
 
+    print('#####################')
+    print(d_type, 'in', country_list)
+    print('Disaster started on', start_date)
+    if ongoing:
+        print('Disaster is ongoing')
+    else:
+        print('Disaster ended on', end_date)
+    print('Severity index -', severity_index)
 
+
+for d in output:
+    keys = output[d][0].keys()
+    with open(d+'.csv', 'w', newline='') as output_file:
+        dict_writer = csv.DictWriter(output_file, keys)
+        dict_writer.writeheader()
+        dict_writer.writerows(output[d])
 
 # debug point
 ender = True
